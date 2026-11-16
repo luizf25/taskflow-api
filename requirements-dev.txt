@@ -1,0 +1,5 @@
+# Dependências de desenvolvimento e testes (não entram na imagem Docker)
+-r requirements.txt
+pytest==9.2.0
+httpx2==2.16.2
+pip-audit==2.10.1
