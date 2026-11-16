@@ -25,6 +25,8 @@ O objetivo do projeto não é a complexidade da aplicação, e sim demonstrar o 
 - [Versionamento e branches](#versionamento-e-branches)
 - [Pipeline de CI/CD](#pipeline-de-cicd)
 - [Artefato gerado](#artefato-gerado)
+- [Estratégia de implantação (CD)](#estratégia-de-implantação-cd)
+- [Monitoramento e observabilidade](#monitoramento-e-observabilidade)
 - [Segurança (DevSecOps)](#segurança-devsecops)
 - [Evidências do pipeline](#evidências-do-pipeline)
 
@@ -251,6 +253,101 @@ docker pull ghcr.io/luizf25/taskflow-api:1.1.0
 docker run -d -p 8000:8000 ghcr.io/luizf25/taskflow-api:1.1.0
 curl http://localhost:8000/health
 ```
+
+## Estratégia de implantação (CD)
+
+Adotamos **entrega contínua com implantação manual via Docker Compose**:
+
+- **Entrega contínua:** toda tag de versão `vX.Y.Z` gera automaticamente uma imagem testada e imutável no GHCR. A versão fica sempre pronta para ser implantada.
+- **Implantação:** feita em ambiente local com Docker Compose, puxando a imagem do GHCR pela tag. A versão implantada é escolhida pela variável `IMAGE_TAG` no arquivo `.env`, sem editar o `docker-compose.yml`.
+
+### Etapas do processo
+
+| Etapa | Onde acontece | O que é feito |
+|---|---|---|
+| **Construção** | GitHub Actions | Instalação de dependências, validação com `compileall` e build da imagem Docker |
+| **Teste** | GitHub Actions | `pip-audit` e os testes com `pytest`. Se algo falhar, o processo para aqui |
+| **Entrega** | GitHub Actions → GHCR | A imagem aprovada é publicada no GHCR com a tag da versão (`1.0.0`, `1.1.0`...) |
+| **Implantação** | Máquina de execução | `docker compose pull` + `docker compose up -d` baixam a imagem e sobem o container |
+
+### Implantar
+
+```bash
+cp .env.example .env
+# no .env: IMAGE_TAG=1.0.0
+docker compose pull
+docker compose up -d
+curl http://localhost:8000/health
+# {"status":"ok","versao":"1.0.0"}
+```
+
+### Atualizar de versão (1.0.0 → 1.1.0)
+
+1. Criar a nova versão: depois do merge na `main`, criar e enviar a tag `v1.1.0`
+   ```bash
+   git tag -a v1.1.0 -m "Versão 1.1.0"
+   git push origin v1.1.0
+   ```
+2. O pipeline testa e publica `ghcr.io/luizf25/taskflow-api:1.1.0`
+3. No ambiente de execução, trocar a versão no `.env` e reimplantar:
+   ```bash
+   # no .env: IMAGE_TAG=1.1.0
+   docker compose pull
+   docker compose up -d
+   curl http://localhost:8000/health
+   # {"status":"ok","versao":"1.1.0"}
+   ```
+
+### Voltar para a versão anterior (rollback)
+
+Como cada versão continua publicada no GHCR, o rollback é só apontar para a tag anterior:
+
+```bash
+# no .env: IMAGE_TAG=1.0.0
+docker compose up -d
+curl http://localhost:8000/health
+# {"status":"ok","versao":"1.0.0"}
+```
+
+O container é recriado com a imagem `1.0.0` em poucos segundos, sem precisar recompilar nada. Para confirmar a diferença entre as versões: na `1.0.0`, um título com 101 caracteres é aceito; na `1.1.0`, ele é rejeitado com 400.
+
+## Monitoramento e observabilidade
+
+Mecanismos implementados:
+
+| Mecanismo | Descrição |
+|---|---|
+| `GET /health` | Retorna `{"status":"ok","versao":"X.Y.Z"}`. Mostra que a aplicação responde e qual versão está no ar |
+| `HEALTHCHECK` do Docker | A cada 30 segundos o Docker chama o `/health`. Após 3 falhas seguidas, o container é marcado como `unhealthy` |
+| Logs da aplicação | Cada operação (criação, conclusão, remoção) gera log `INFO`. Erros de uso (tarefa inexistente, título inválido) geram log `WARNING` |
+| Logs de acesso | O Uvicorn registra cada requisição com método, rota e código de resposta |
+| `LOG_LEVEL` | Permite aumentar o detalhe dos logs (`DEBUG`) sem alterar o código |
+
+### Como identificar uma falha após a implantação
+
+1. **Verificar a saúde da aplicação**
+   ```bash
+   curl http://localhost:8000/health
+   ```
+   Se não houver resposta, ou se a resposta não for `200`, a aplicação está com problema.
+
+2. **Verificar o estado do container**
+   ```bash
+   docker compose ps
+   ```
+   A coluna `STATUS` mostra `Up (healthy)` quando está tudo certo. `unhealthy`, `Restarting` ou `Exited` indicam falha.
+
+3. **Consultar os logs**
+   ```bash
+   docker compose logs -f api
+   ```
+   Linhas `WARNING` e `ERROR` mostram o que deu errado, por exemplo:
+   ```
+   WARNING [taskflow] Tarefa 999 não encontrada
+   INFO:     172.18.0.1:41418 - "DELETE /tarefas/999 HTTP/1.1" 404 Not Found
+   ```
+
+4. **Se a falha veio com uma versão nova**, fazer o [rollback](#voltar-para-a-versão-anterior-rollback) para a versão anterior enquanto o problema é corrigido.
 
 ## Segurança (DevSecOps)
 
