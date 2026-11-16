@@ -1,0 +1,10 @@
+services:
+  api:
+    # A versão implantada é escolhida pela variável IMAGE_TAG (arquivo .env)
+    image: ghcr.io/luizf25/taskflow-api:${IMAGE_TAG:-latest}
+    container_name: taskflow-api
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    restart: unless-stopped
