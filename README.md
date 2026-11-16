@@ -38,7 +38,7 @@ A API permite cadastrar, listar, concluir e remover tarefas. Os dados ficam em m
 |---|---|---|---|
 | GET | `/health` | Verificação de saúde (status e versão) | 200 |
 | GET | `/tarefas` | Lista todas as tarefas | 200 |
-| POST | `/tarefas` | Cria uma tarefa (`{"titulo": "..."}`) | 201, 400 |
+| POST | `/tarefas` | Cria uma tarefa (`{"titulo": "..."}`) | 201, 400, 422 |
 | PUT | `/tarefas/{id}/concluir` | Marca a tarefa como concluída | 200, 404 |
 | DELETE | `/tarefas/{id}` | Remove a tarefa | 204, 404 |
 
@@ -46,6 +46,7 @@ Regras de negócio:
 - O título é obrigatório (vazio ou só com espaços retorna **400**)
 - O título tem no máximo **100 caracteres** (acima disso retorna **400**)
 - Concluir ou remover uma tarefa inexistente retorna **404**
+- Requisição com formato inválido (sem o campo `titulo` ou id não numérico) retorna **422**, pela validação automática do FastAPI
 
 ## Tecnologias e ferramentas
 
@@ -176,7 +177,7 @@ Adotamos o **GitHub Flow**, por ser a estratégia mais simples para uma equipe p
 
 - A branch `main` está sempre estável e pronta para gerar uma versão
 - Toda alteração é feita em uma branch própria, criada a partir da `main`
-- A alteração volta para a `main` **somente por Pull Request**, revisado e aprovado pelo outro integrante
+- Por regra da equipe, a alteração volta para a `main` **somente por Pull Request**, revisado e aprovado pelo outro integrante
 - O pipeline roda em cada Pull Request, então problemas aparecem antes do merge
 - Versões são marcadas com tags no padrão `vX.Y.Z` (versionamento semântico)
 
@@ -212,7 +213,7 @@ Arquivo: [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)
 |---|---|
 | Pull Request para a `main` | Valida, testa e constrói a imagem (sem publicar) |
 | Push na `main` (merge de PR) | Valida, testa e publica a imagem com tag `sha-<commit>` |
-| Tag `vX.Y.Z` | Valida, testa e publica a imagem com tags `X.Y.Z` e `latest` |
+| Tag `vX.Y.Z` | Valida, testa e publica a imagem com tags `X.Y.Z`, `latest` e `sha-<commit>` |
 
 **Job 1: Validar e testar**
 
@@ -240,7 +241,7 @@ O artefato é uma **imagem Docker** publicada no GitHub Container Registry:
 |---|---|---|
 | `1.0.0`, `1.1.0`... | Tag git `v1.0.0`, `v1.1.0`... | Versões oficiais para implantação |
 | `latest` | Última tag de versão | Atalho para a versão mais recente |
-| `sha-<commit>` | Cada push na `main` | Rastrear exatamente qual commit gerou a imagem |
+| `sha-<commit>` | Cada push na `main` e cada tag de versão | Rastrear exatamente qual commit gerou a imagem |
 
 Rastreabilidade:
 - A versão é gravada dentro da imagem (`APP_VERSION`) e aparece no `GET /health`
@@ -343,7 +344,7 @@ Mecanismos implementados:
    ```
    Linhas `WARNING` e `ERROR` mostram o que deu errado, por exemplo:
    ```
-   WARNING [taskflow] Tarefa 999 não encontrada
+   2026-11-16 19:25:03,161 WARNING [taskflow] Tarefa 999 não encontrada
    INFO:     172.18.0.1:41418 - "DELETE /tarefas/999 HTTP/1.1" 404 Not Found
    ```
 
@@ -372,6 +373,7 @@ Histórico completo: [GitHub Actions](https://github.com/luizf25/taskflow-api/ac
 | [43938332132](https://github.com/luizf25/taskflow-api/actions/runs/43938332132) | Tag `v1.0.0`, publicou a imagem `1.0.0` | ✅ Sucesso |
 | [43938416223](https://github.com/luizf25/taskflow-api/actions/runs/43938416223) | PR #5, nova regra com erro | ❌ Falha |
 | [43938609282](https://github.com/luizf25/taskflow-api/actions/runs/43938609282) | PR #5, após a correção | ✅ Sucesso |
+| [43938833873](https://github.com/luizf25/taskflow-api/actions/runs/43938833873) | Tag `v1.1.0`, publicou a imagem `1.1.0` | ✅ Sucesso |
 
 ### Falha controlada: o que aconteceu e como foi corrigida
 
