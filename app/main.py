@@ -15,6 +15,9 @@ app = FastAPI(
     description="API REST de lista de tarefas - Projeto Final de Integração DevOps.",
 )
 
+# Tamanho máximo permitido para o título de uma tarefa
+LIMITE_TITULO = 100
+
 # Armazenamento em memória: os dados são perdidos ao reiniciar a aplicação.
 tarefas: dict[int, dict] = {}
 proximo_id = 1
@@ -52,7 +55,14 @@ def criar_tarefa(dados: NovaTarefa):
         logger.warning("Tentativa de criar tarefa sem título")
         raise HTTPException(status_code=400, detail="O título da tarefa é obrigatório")
 
-    tarefa = {"id": proximo_id, "titulo": titulo, "concluida": False}
+    if len(titulo) >= LIMITE_TITULO:
+        logger.warning("Título com %s caracteres excede o limite", len(titulo))
+        raise HTTPException(
+            status_code=400,
+            detail=f"O título deve ter no máximo {LIMITE_TITULO} caracteres",
+        )
+
+    tarefa ={"id": proximo_id, "titulo": titulo, "concluida": False}
     tarefas[proximo_id] = tarefa
     proximo_id += 1
     logger.info("Tarefa %s criada", tarefa["id"])

@@ -39,6 +39,16 @@ def test_criar_tarefa_sem_titulo_retorna_400():
     assert resposta.status_code == 400
 
 
+def test_titulo_com_100_caracteres_e_aceito():
+    resposta = criar("a" * 100)
+    assert resposta.status_code == 201
+
+
+def test_titulo_com_101_caracteres_e_rejeitado():
+    resposta = criar("a" * 101)
+    assert resposta.status_code == 400
+
+
 def test_listar_tarefas():
     criar("Tarefa 1")
     criar("Tarefa 2")
