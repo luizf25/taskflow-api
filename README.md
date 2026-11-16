@@ -25,6 +25,8 @@ O objetivo do projeto não é a complexidade da aplicação, e sim demonstrar o 
 - [Versionamento e branches](#versionamento-e-branches)
 - [Pipeline de CI/CD](#pipeline-de-cicd)
 - [Artefato gerado](#artefato-gerado)
+- [Estratégia de implantação (CD)](#estratégia-de-implantação-cd)
+- [Monitoramento e observabilidade](#monitoramento-e-observabilidade)
 - [Segurança (DevSecOps)](#segurança-devsecops)
 - [Evidências do pipeline](#evidências-do-pipeline)
 
@@ -36,7 +38,7 @@ A API permite cadastrar, listar, concluir e remover tarefas. Os dados ficam em m
 |---|---|---|---|
 | GET | `/health` | Verificação de saúde (status e versão) | 200 |
 | GET | `/tarefas` | Lista todas as tarefas | 200 |
-| POST | `/tarefas` | Cria uma tarefa (`{"titulo": "..."}`) | 201, 400 |
+| POST | `/tarefas` | Cria uma tarefa (`{"titulo": "..."}`) | 201, 400, 422 |
 | PUT | `/tarefas/{id}/concluir` | Marca a tarefa como concluída | 200, 404 |
 | DELETE | `/tarefas/{id}` | Remove a tarefa | 204, 404 |
 
@@ -44,6 +46,7 @@ Regras de negócio:
 - O título é obrigatório (vazio ou só com espaços retorna **400**)
 - O título tem no máximo **100 caracteres** (acima disso retorna **400**)
 - Concluir ou remover uma tarefa inexistente retorna **404**
+- Requisição com formato inválido (sem o campo `titulo` ou id não numérico) retorna **422**, pela validação automática do FastAPI
 
 ## Tecnologias e ferramentas
 
@@ -174,7 +177,7 @@ Adotamos o **GitHub Flow**, por ser a estratégia mais simples para uma equipe p
 
 - A branch `main` está sempre estável e pronta para gerar uma versão
 - Toda alteração é feita em uma branch própria, criada a partir da `main`
-- A alteração volta para a `main` **somente por Pull Request**, revisado e aprovado pelo outro integrante
+- Por regra da equipe, a alteração volta para a `main` **somente por Pull Request**, revisado e aprovado pelo outro integrante
 - O pipeline roda em cada Pull Request, então problemas aparecem antes do merge
 - Versões são marcadas com tags no padrão `vX.Y.Z` (versionamento semântico)
 
@@ -210,7 +213,7 @@ Arquivo: [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)
 |---|---|
 | Pull Request para a `main` | Valida, testa e constrói a imagem (sem publicar) |
 | Push na `main` (merge de PR) | Valida, testa e publica a imagem com tag `sha-<commit>` |
-| Tag `vX.Y.Z` | Valida, testa e publica a imagem com tags `X.Y.Z` e `latest` |
+| Tag `vX.Y.Z` | Valida, testa e publica a imagem com tags `X.Y.Z`, `latest` e `sha-<commit>` |
 
 **Job 1: Validar e testar**
 
@@ -238,7 +241,7 @@ O artefato é uma **imagem Docker** publicada no GitHub Container Registry:
 |---|---|---|
 | `1.0.0`, `1.1.0`... | Tag git `v1.0.0`, `v1.1.0`... | Versões oficiais para implantação |
 | `latest` | Última tag de versão | Atalho para a versão mais recente |
-| `sha-<commit>` | Cada push na `main` | Rastrear exatamente qual commit gerou a imagem |
+| `sha-<commit>` | Cada push na `main` e cada tag de versão | Rastrear exatamente qual commit gerou a imagem |
 
 Rastreabilidade:
 - A versão é gravada dentro da imagem (`APP_VERSION`) e aparece no `GET /health`
@@ -251,6 +254,101 @@ docker pull ghcr.io/luizf25/taskflow-api:1.1.0
 docker run -d -p 8000:8000 ghcr.io/luizf25/taskflow-api:1.1.0
 curl http://localhost:8000/health
 ```
+
+## Estratégia de implantação (CD)
+
+Adotamos **entrega contínua com implantação manual via Docker Compose**:
+
+- **Entrega contínua:** toda tag de versão `vX.Y.Z` gera automaticamente uma imagem testada e imutável no GHCR. A versão fica sempre pronta para ser implantada.
+- **Implantação:** feita em ambiente local com Docker Compose, puxando a imagem do GHCR pela tag. A versão implantada é escolhida pela variável `IMAGE_TAG` no arquivo `.env`, sem editar o `docker-compose.yml`.
+
+### Etapas do processo
+
+| Etapa | Onde acontece | O que é feito |
+|---|---|---|
+| **Construção** | GitHub Actions | Instalação de dependências, validação com `compileall` e build da imagem Docker |
+| **Teste** | GitHub Actions | `pip-audit` e os testes com `pytest`. Se algo falhar, o processo para aqui |
+| **Entrega** | GitHub Actions → GHCR | A imagem aprovada é publicada no GHCR com a tag da versão (`1.0.0`, `1.1.0`...) |
+| **Implantação** | Máquina de execução | `docker compose pull` + `docker compose up -d` baixam a imagem e sobem o container |
+
+### Implantar
+
+```bash
+cp .env.example .env
+# no .env: IMAGE_TAG=1.0.0
+docker compose pull
+docker compose up -d
+curl http://localhost:8000/health
+# {"status":"ok","versao":"1.0.0"}
+```
+
+### Atualizar de versão (1.0.0 → 1.1.0)
+
+1. Criar a nova versão: depois do merge na `main`, criar e enviar a tag `v1.1.0`
+   ```bash
+   git tag -a v1.1.0 -m "Versão 1.1.0"
+   git push origin v1.1.0
+   ```
+2. O pipeline testa e publica `ghcr.io/luizf25/taskflow-api:1.1.0`
+3. No ambiente de execução, trocar a versão no `.env` e reimplantar:
+   ```bash
+   # no .env: IMAGE_TAG=1.1.0
+   docker compose pull
+   docker compose up -d
+   curl http://localhost:8000/health
+   # {"status":"ok","versao":"1.1.0"}
+   ```
+
+### Voltar para a versão anterior (rollback)
+
+Como cada versão continua publicada no GHCR, o rollback é só apontar para a tag anterior:
+
+```bash
+# no .env: IMAGE_TAG=1.0.0
+docker compose up -d
+curl http://localhost:8000/health
+# {"status":"ok","versao":"1.0.0"}
+```
+
+O container é recriado com a imagem `1.0.0` em poucos segundos, sem precisar recompilar nada. Para confirmar a diferença entre as versões: na `1.0.0`, um título com 101 caracteres é aceito; na `1.1.0`, ele é rejeitado com 400.
+
+## Monitoramento e observabilidade
+
+Mecanismos implementados:
+
+| Mecanismo | Descrição |
+|---|---|
+| `GET /health` | Retorna `{"status":"ok","versao":"X.Y.Z"}`. Mostra que a aplicação responde e qual versão está no ar |
+| `HEALTHCHECK` do Docker | A cada 30 segundos o Docker chama o `/health`. Após 3 falhas seguidas, o container é marcado como `unhealthy` |
+| Logs da aplicação | Cada operação (criação, conclusão, remoção) gera log `INFO`. Erros de uso (tarefa inexistente, título inválido) geram log `WARNING` |
+| Logs de acesso | O Uvicorn registra cada requisição com método, rota e código de resposta |
+| `LOG_LEVEL` | Permite aumentar o detalhe dos logs (`DEBUG`) sem alterar o código |
+
+### Como identificar uma falha após a implantação
+
+1. **Verificar a saúde da aplicação**
+   ```bash
+   curl http://localhost:8000/health
+   ```
+   Se não houver resposta, ou se a resposta não for `200`, a aplicação está com problema.
+
+2. **Verificar o estado do container**
+   ```bash
+   docker compose ps
+   ```
+   A coluna `STATUS` mostra `Up (healthy)` quando está tudo certo. `unhealthy`, `Restarting` ou `Exited` indicam falha.
+
+3. **Consultar os logs**
+   ```bash
+   docker compose logs -f api
+   ```
+   Linhas `WARNING` e `ERROR` mostram o que deu errado, por exemplo:
+   ```
+   2026-11-16 19:25:03,161 WARNING [taskflow] Tarefa 999 não encontrada
+   INFO:     172.18.0.1:41418 - "DELETE /tarefas/999 HTTP/1.1" 404 Not Found
+   ```
+
+4. **Se a falha veio com uma versão nova**, fazer o [rollback](#voltar-para-a-versão-anterior-rollback) para a versão anterior enquanto o problema é corrigido.
 
 ## Segurança (DevSecOps)
 
@@ -275,6 +373,7 @@ Histórico completo: [GitHub Actions](https://github.com/luizf25/taskflow-api/ac
 | [43938332132](https://github.com/luizf25/taskflow-api/actions/runs/43938332132) | Tag `v1.0.0`, publicou a imagem `1.0.0` | ✅ Sucesso |
 | [43938416223](https://github.com/luizf25/taskflow-api/actions/runs/43938416223) | PR #5, nova regra com erro | ❌ Falha |
 | [43938609282](https://github.com/luizf25/taskflow-api/actions/runs/43938609282) | PR #5, após a correção | ✅ Sucesso |
+| [43938833873](https://github.com/luizf25/taskflow-api/actions/runs/43938833873) | Tag `v1.1.0`, publicou a imagem `1.1.0` | ✅ Sucesso |
 
 ### Falha controlada: o que aconteceu e como foi corrigida
 
