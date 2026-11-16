@@ -55,7 +55,7 @@ def criar_tarefa(dados: NovaTarefa):
         logger.warning("Tentativa de criar tarefa sem título")
         raise HTTPException(status_code=400, detail="O título da tarefa é obrigatório")
 
-    if len(titulo) >= LIMITE_TITULO:
+    if len(titulo) > LIMITE_TITULO:
         logger.warning("Título com %s caracteres excede o limite", len(titulo))
         raise HTTPException(
             status_code=400,
